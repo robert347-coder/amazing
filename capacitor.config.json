@@ -1,0 +1,6 @@
+{
+  "appId": "es.amazingjesus.app",
+  "appName": "Amazing Jesús",
+  "webDir": "www",
+  "android": { "backgroundColor": "#EEF2FA" }
+}

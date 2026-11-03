@@ -1,0 +1,51 @@
+# Construye el APK de prueba de Amazing Jesús en los servidores de GitHub
+# cada vez que se suben cambios (o al pulsar "Run workflow" en Actions).
+# El APK queda en la pestaña "Releases" del repositorio, listo para
+# descargarlo desde el móvil.
+name: Construir APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # necesario para publicar el APK en "Releases"
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Instalar Capacitor
+        run: npm install
+      - name: Crear el proyecto Android con los iconos de la app
+        run: |
+          npx cap add android
+          npx capacitor-assets generate --android --iconBackgroundColor '#2B4C9B' --splashBackgroundColor '#EEF2FA' --splashBackgroundColorDark '#14244F' || echo "Iconos por defecto"
+          npx cap sync android
+      - name: Compilar el APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amazing-jesus-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Publicar el APK en "Releases"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk AmazingJesus-prueba.apk
+          gh release create "prueba-${{ github.run_number }}" AmazingJesus-prueba.apk \
+            --title "Amazing Jesús · prueba ${{ github.run_number }}" \
+            --notes "APK de prueba. Sin datos personales: el progreso se guarda solo en el móvil. Descarga AmazingJesus-prueba.apk e instálalo." \
+            --latest

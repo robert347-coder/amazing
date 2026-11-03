@@ -1,0 +1,18 @@
+{
+  "name": "amazing-jesus-apk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "App Android de prueba de Amazing Jesús (catequesis de Primera Comunión), empaquetada con Capacitor",
+  "scripts": {
+    "preparar": "cap add android || true; cap sync android",
+    "iconos": "capacitor-assets generate --android --iconBackgroundColor '#2B4C9B' --splashBackgroundColor '#EEF2FA' --splashBackgroundColorDark '#14244F'"
+  },
+  "dependencies": {
+    "@capacitor/android": "6.1.2",
+    "@capacitor/core": "6.1.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "3.0.5",
+    "@capacitor/cli": "6.1.2"
+  }
+}

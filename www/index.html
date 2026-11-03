@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- =========================================================================
+     AMAZING JESÚS · index.html
+     Página principal. Carga los estilos, la configuración, el contenido y la
+     lógica, y registra el "service worker" para que funcione sin internet.
+     ========================================================================= -->
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Amazing Jesús</title>
+  <meta name="description" content="Repaso de catequesis de Primera Comunión para niños y familias.">
+  <meta name="theme-color" content="#2B4C9B">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <!-- Sin Google Fonts a propósito (RGPD): se usan las letras del propio dispositivo.
+       Para usar Baloo 2 y Nunito, descarga sus archivos .woff2 a una carpeta "fonts"
+       y decláralos con @font-face en styles.css. -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="app" aria-live="polite"></main>
+  <noscript>Esta app necesita JavaScript activado.</noscript>
+
+  <script src="config.js"></script>
+  <script src="contenido.js"></script>
+  <script src="app.js"></script>
+  <script>
+    // Permite instalar la app y usarla sin conexión
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+    }
+  </script>
+</body>
+</html>
