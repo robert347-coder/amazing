@@ -1,12 +1,12 @@
-# Construye el APK de prueba de Amazing Jesús en los servidores de GitHub
-# cada vez que se suben cambios (o al pulsar "Run workflow" en Actions).
+# Construye el APK de Amazing Tea en los servidores de GitHub cada vez que
+# se suben cambios a la rama "amazing-tea" (o al pulsar "Run workflow").
 # El APK queda en la pestaña "Releases" del repositorio, listo para
-# descargarlo desde el móvil.
-name: Construir APK
+# descargarlo desde el móvil. No afecta a Amazing Jesús (rama "main").
+name: Construir APK Amazing Tea
 
 on:
   push:
-    branches: [main]
+    branches: [amazing-tea]
   workflow_dispatch:
 
 permissions:
@@ -29,8 +29,11 @@ jobs:
       - name: Crear el proyecto Android con los iconos de la app
         run: |
           npx cap add android
-          npx capacitor-assets generate --android --iconBackgroundColor '#2B4C9B' --splashBackgroundColor '#EEF2FA' --splashBackgroundColorDark '#14244F' || echo "Iconos por defecto"
+          npx capacitor-assets generate --android --iconBackgroundColor '#2F5D50' --splashBackgroundColor '#F7F3EA' --splashBackgroundColorDark '#161513' || echo "Iconos por defecto"
           npx cap sync android
+      - name: Permitir la vibración al terminar el temporizador
+        run: |
+          sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.VIBRATE" />#' android/app/src/main/AndroidManifest.xml
       - name: Compilar el APK
         run: |
           cd android
@@ -38,14 +41,15 @@ jobs:
           ./gradlew assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: amazing-jesus-apk
+          name: amazing-tea-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
       - name: Publicar el APK en "Releases"
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk AmazingJesus-prueba.apk
-          gh release create "prueba-${{ github.run_number }}" AmazingJesus-prueba.apk \
-            --title "Amazing Jesús · prueba ${{ github.run_number }}" \
-            --notes "APK de prueba. Sin datos personales: el progreso se guarda solo en el móvil. Descarga AmazingJesus-prueba.apk e instálalo." \
-            --latest
+          cp android/app/build/outputs/apk/debug/app-debug.apk AmazingTea.apk
+          gh release create "tea-${{ github.run_number }}" AmazingTea.apk \
+            --target amazing-tea \
+            --title "Amazing Tea · versión ${{ github.run_number }}" \
+            --notes "APK de Amazing Tea para uso personal. Sin cuentas ni internet: todo se guarda solo en el móvil. Descarga AmazingTea.apk e instálalo." \
+            --latest=false

@@ -1,6 +1,6 @@
 {
-  "appId": "es.amazingjesus.app",
-  "appName": "Amazing Jesús",
+  "appId": "es.amazingtea.app",
+  "appName": "Amazing Tea",
   "webDir": "www",
-  "android": { "backgroundColor": "#EEF2FA" }
+  "android": { "backgroundColor": "#F7F3EA" }
 }

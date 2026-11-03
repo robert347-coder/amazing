@@ -1,664 +1,615 @@
 /* =========================================================================
-   AMAZING JESÚS · app.js
+   AMAZING TEA · app.js
    -------------------------------------------------------------------------
-   La "lógica" de la app: perfiles, partidas, puntos, regla del 80%,
-   examen final, pantalla de padres y rosario interactivo.
+   La lógica de la app: pantallas, buscador y filtros, té del día,
+   temporizador con ritual, pasaporte, reto de 30 días y registro de peso.
 
-   PRIVACIDAD: no se envía nada a internet. Todo se guarda en el propio
-   dispositivo (localStorage). Si se borra la app o los datos del navegador,
-   el progreso se pierde.
+   PRIVACIDAD: no se envía nada a internet. Favoritos, sellos, reto y peso
+   se guardan solo en este móvil (localStorage). Si desinstalas la app o
+   borras sus datos, se pierden.
    ========================================================================= */
 
 (function () {
   "use strict";
 
   /* ------------------------------------------------------------------ *
-   * 1. GUARDADO EN EL DISPOSITIVO                                       *
+   * 1. DATOS GUARDADOS EN EL MÓVIL                                      *
    * ------------------------------------------------------------------ */
-  const CLAVE = "amazingJesus.v1";
-  const COLORES = ["#2B4C9B", "#B5612E", "#3F7D6E", "#8A4FA3", "#A83B4E", "#C0882E", "#2F6FB0", "#4F7A2A"];
+  const CLAVE = "amazingTea.v1";
+  const VACIO = () => ({ fav: [], hechas: {}, reto: null, peso: [] });
 
   function cargar() {
     try {
       const raw = localStorage.getItem(CLAVE);
-      if (raw) return JSON.parse(raw);
-    } catch (e) { /* sin almacenamiento: la app funciona igual, pero no recuerda */ }
-    return { perfiles: [], actual: null };
+      if (raw) return Object.assign(VACIO(), JSON.parse(raw));
+    } catch (e) { /* sin almacenamiento: funciona igual, pero no recuerda */ }
+    return VACIO();
   }
   function guardar() {
     try { localStorage.setItem(CLAVE, JSON.stringify(datos)); } catch (e) { /* ignorar */ }
   }
-
   let datos = cargar();
 
   /* ------------------------------------------------------------------ *
-   * 2. UTILIDADES                                                       *
+   * 2. AYUDANTES                                                        *
    * ------------------------------------------------------------------ */
   const $app = document.getElementById("app");
+  const $titulo = document.getElementById("titulo");
+  const $atras = document.getElementById("btnAtras");
+  const POR_ID = {};
+  RECETAS.forEach(r => (POR_ID[r.id] = r));
 
-  // Evita que un apodo con símbolos raros "rompa" la página
+  // Evita que un texto escrito por el usuario se interprete como código
   function esc(s) {
     return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
-  function barajar(arr) {
-    const a = arr.slice();
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [a[i], a[j]] = [a[j], a[i]];
-    }
-    return a;
+  // Quita tildes y mayúsculas para que el buscador encuentre "té" escribiendo "te"
+  function normal(s) {
+    return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
   }
-  function perfilActual() { return datos.perfiles.find(p => p.id === datos.actual) || null; }
-  function bloque(id) { return BLOQUES.find(b => b.id === id); }
-  function bloquesObligatorios() {
-    return BLOQUES.filter(b => !esExtra(b));
+  // Fecha de hoy en formato AAAA-MM-DD (hora local de España)
+  function fechaISO(d) {
+    d = d || new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   }
-  // Rosario y Vía Crucis son obligatorios u opcionales según config.js
-  function esExtra(b) {
-    if (b.id === "ros") return !CONFIG.rosarioObligatorio;
-    if (b.id === "via") return !CONFIG.viaCrucisObligatorio;
-    return false;
+  function sumarDias(iso, n) {
+    const [a, m, d] = iso.split("-").map(Number);
+    return fechaISO(new Date(a, m - 1, d + n));
   }
-  function arriba() { window.scrollTo({ top: 0, behavior: "instant" in window ? "instant" : "auto" }); }
+  function diasEntre(isoA, isoB) {
+    const [a1, m1, d1] = isoA.split("-").map(Number);
+    const [a2, m2, d2] = isoB.split("-").map(Number);
+    return Math.round((new Date(a2, m2 - 1, d2) - new Date(a1, m1 - 1, d1)) / 86400000);
+  }
+  function fechaBonita(iso) {
+    const [a, m, d] = iso.split("-").map(Number);
+    return new Date(a, m - 1, d).toLocaleDateString("es-ES", { day: "numeric", month: "short", year: "numeric" });
+  }
+  function aviso(texto) {
+    document.querySelectorAll(".aviso-toast").forEach(x => x.remove());
+    const t = document.createElement("div");
+    t.className = "aviso-toast";
+    t.textContent = texto;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 2200);
+  }
+
+  const ICONO_TIPO = { caliente: "☕", frio: "🧊", especial: "🍹", vitalidad: "🌿" };
+  const NOMBRE_TIPO = { caliente: "Caliente", frio: "Frío", especial: "Especial", vitalidad: "Vitalidad" };
+  const NOMBRE_CAF = { alta: "Cafeína alta", media: "Cafeína media", baja: "Poca cafeína", no: "Sin cafeína" };
+  const EFECTOS = {
+    energia: "⚡ Energía", relax: "😌 Relax", dormir: "😴 Dormir",
+    digestion: "🌿 Digestión", hidratacion: "💧 Hidratación", antojo: "🍯 Antojo dulce"
+  };
+  const MOMENTOS = { "mañana": "🌅", "mediodía": "☀️", "tarde": "🌤️", "noche": "🌙" };
+
+  function tiempoTexto(r) {
+    if (!r.seg) return r.espera || "";
+    if (r.seg < 60) return r.seg + " s";
+    const m = r.seg / 60;
+    return (Number.isInteger(m) ? m : m.toFixed(1).replace(".", ",")) + " min";
+  }
+  function bandera(p) { return BANDERAS[p] || "🌍"; }
+  function esFav(id) { return datos.fav.includes(id); }
 
   /* ------------------------------------------------------------------ *
-   * 3. REGLAS: cuándo un bloque está dominado y cuándo se llega al final *
+   * 3. TÉ DEL DÍA                                                       *
+   *    Cambia cada día. Por la tarde-noche solo propone opciones sin    *
+   *    cafeína o con muy poca; en verano prefiere bebidas frías.        *
    * ------------------------------------------------------------------ */
-  // Un bloque está DOMINADO si los últimos N intentos (3) superan el 80%.
-  function dominado(p, bid) {
-    const ints = (p.intentos[bid] || []).slice(-CONFIG.intentosParaDominar);
-    return ints.length >= CONFIG.intentosParaDominar && ints.every(x => x >= CONFIG.aciertoMinimo);
+  function teDelDia() {
+    const ahora = new Date();
+    const hora = ahora.getHours();
+    const mes = ahora.getMonth(); // 0 = enero
+    const verano = mes >= 5 && mes <= 8;
+    let lista = RECETAS.filter(r => r.id !== "kombucha");
+    if (hora >= 17 || hora < 5) lista = lista.filter(r => r.caf === "no" || r.caf === "baja");
+    const preferidas = lista.filter(r => verano ? (r.t === "frio" || r.t === "especial") : (r.t === "caliente" || r.t === "vitalidad"));
+    if (preferidas.length) lista = preferidas;
+    // Número "aleatorio" fijo para todo el día, a partir de la fecha
+    const semilla = fechaISO().split("").reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+    return lista[semilla % lista.length];
   }
-  function examenDesbloqueado(p) { return bloquesObligatorios().every(b => dominado(p, b.id)); }
-  function progresoGlobal(p) {
-    const obl = bloquesObligatorios();
-    let total = 0;
-    obl.forEach(b => {
-      const ints = (p.intentos[b.id] || []).slice(-CONFIG.intentosParaDominar);
-      const buenos = ints.filter(x => x >= CONFIG.aciertoMinimo).length;
-      total += dominado(p, b.id) ? 1 : buenos / (CONFIG.intentosParaDominar + 1);
-    });
-    const examen = p.nivelFinal ? 1 : 0;
-    return Math.round(((total + examen) / (obl.length + 1)) * 100);
-  }
-
-  /* ------------------------------------------------------------------ *
-   * 4. ELEGIR PREGUNTAS (repaso inteligente)                             *
-   *    Las preguntas falladas tienen más probabilidad de volver a salir. *
-   * ------------------------------------------------------------------ */
-  function prepararPregunta(b, i) {
-    const [q, opciones, exp] = b.preguntas[i];
-    const correcta = opciones[0];
-    return { qid: `${b.id}-${i}`, bid: b.id, q, opts: opciones.length === 2 ? opciones.slice() : barajar(opciones), correcta, exp };
-  }
-  function elegir(p, b, n) {
-    const pool = b.preguntas.map((_, i) => i).map(i => {
-      const fallos = p.fallos[`${b.id}-${i}`] || 0;
-      return { i, peso: 1 + fallos * 2, r: Math.random() };
-    });
-    // sorteo ponderado sin repetición
-    pool.forEach(x => { x.clave = Math.pow(x.r, 1 / x.peso); });
-    pool.sort((a, c) => c.clave - a.clave);
-    return pool.slice(0, Math.min(n, pool.length)).map(x => prepararPregunta(b, x.i));
-  }
-
-  /* ------------------------------------------------------------------ *
-   * 5. ICONOS (dibujados en SVG, sin imágenes externas)                 *
-   * ------------------------------------------------------------------ */
-  const LOGO = `<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="22" fill="var(--marian)"/><g stroke="var(--gold-bright)" stroke-width="2.4" stroke-linecap="round"><path d="M24 6v6M24 36v6M6 24h6M36 24h6M11.3 11.3l4.2 4.2M32.5 32.5l4.2 4.2M36.7 11.3l-4.2 4.2M15.5 32.5l-4.2 4.2"/></g><path d="M21.5 13h5v8h7v5h-7v11h-5V26h-7v-5h7z" fill="#fff"/></svg>`;
-  const RAYOS = `<svg class="rays" viewBox="0 0 200 200" aria-hidden="true"><g stroke="currentColor" stroke-width="6" stroke-linecap="round">${Array.from({ length: 16 }, (_, k) => { const a = k * Math.PI / 8; return `<line x1="${100 + 40 * Math.cos(a)}" y1="${100 + 40 * Math.sin(a)}" x2="${100 + 95 * Math.cos(a)}" y2="${100 + 95 * Math.sin(a)}"/>`; }).join("")}</g><circle cx="100" cy="100" r="28" fill="currentColor"/></svg>`;
-  const CALIZ = `<svg viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="38" r="20" fill="#fff"/><g stroke="var(--gold-bright)" stroke-width="3" stroke-linecap="round">${Array.from({ length: 12 }, (_, k) => { const a = k * Math.PI / 6; return `<line x1="${60 + 26 * Math.cos(a)}" y1="${38 + 26 * Math.sin(a)}" x2="${60 + 36 * Math.cos(a)}" y2="${38 + 36 * Math.sin(a)}"/>`; }).join("")}</g><path d="M56 30h8v6h6v6h-6v10h-8V42h-6v-6h6z" fill="var(--gold-bright)"/><path d="M34 62h52c0 16-10 26-22 28v12h12v6H44v-6h12V90c-12-2-22-12-22-28z" fill="var(--gold-bright)"/></svg>`;
-
-  /* ------------------------------------------------------------------ *
-   * 6. NAVEGACIÓN                                                       *
-   * ------------------------------------------------------------------ */
-  let vista = "inicio";
-  let params = {};
-  let juego = null;     // partida en curso
-  let rosario = null;   // rosario en curso
-  let via = null;       // vía crucis en curso
-
-  function ir(v, pr) { vista = v; params = pr || {}; render(); arriba(); }
-
-  function topbar(conPuntos) {
-    const p = perfilActual();
-    return `<header class="topbar">
-      <div class="brand">${LOGO}<span>${esc(CONFIG.nombreApp)}</span></div>
-      <div class="spacer"></div>
-      ${conPuntos && p ? `<span class="chip-pts" title="Puntos">${p.puntos}</span>` : ""}
-      ${vista !== "inicio" ? `<button class="iconbtn" data-act="inicio" aria-label="Cambiar de niño o niña">Perfiles</button>` : ""}
-    </header>`;
-  }
-  const PIE = `<p class="foot">Esta app no recoge datos: el progreso se guarda solo en este dispositivo.</p>`;
-  const AVISO = `<div class="banner-test"><b>Versión de prueba.</b> Contenido pendiente de revisión por la parroquia.</div>`;
-
-  function render() {
-    const vistas = { inicio: vInicio, nuevo: vNuevo, mapa: vMapa, bloque: vBloque, juego: vJuego, resultado: vResultado, final: vFinal, padres: vPadres, rosario: vRosario, via: vVia };
-    $app.innerHTML = `<div class="shell">${(vistas[vista] || vInicio)()}</div>`;
-    if (vista === "rosario") pintarRosario();
+  function saludo() {
+    const h = new Date().getHours();
+    if (h < 6) return "Buenas noches";
+    if (h < 13) return "Buenos días";
+    if (h < 21) return "Buenas tardes";
+    return "Buenas noches";
   }
 
   /* ------------------------------------------------------------------ *
-   * 7. PANTALLAS                                                        *
+   * 4. PANTALLAS                                                        *
    * ------------------------------------------------------------------ */
 
-  // --- Inicio: elegir perfil ---
-  function vInicio() {
-    const perfiles = datos.perfiles;
-    return `${topbar(false)}
-      <section class="hero">${RAYOS}
-        <p class="eyebrow" style="color:inherit;opacity:.8">${esc(CONFIG.subtitulo)}</p>
-        <h1>¡Hola! Vamos a conocer a Jesús</h1>
-        <p>Aprende la catequesis jugando: lee cada tema, responde preguntas, gana puntos y consigue las medallas.</p>
-      </section>
-      ${AVISO}
-      <section class="stack">
-        <h2>${perfiles.length ? "¿Quién va a jugar?" : "Empieza creando tu perfil"}</h2>
-        <div class="profiles">
-          ${perfiles.map(p => `<button class="profile" data-act="elegir" data-id="${p.id}">
-              <span class="avatar" style="background:${p.color}">${esc(p.nombre.charAt(0).toUpperCase())}</span>
-              <span class="pname">${esc(p.nombre)}</span>
-              <span class="muted small">${p.puntos} puntos · ${progresoGlobal(p)}%</span>
-            </button>`).join("")}
-          <button class="profile" data-act="nuevo" style="border:2px dashed var(--line);box-shadow:none;background:transparent">
-            <span class="avatar" style="background:var(--marian-soft);color:var(--marian)">+</span>
-            <span class="pname">Nuevo perfil</span>
-            <span class="muted small">Solo un apodo</span>
-          </button>
-        </div>
-      </section>
-      ${perfiles.length ? `<button class="btn ghost" data-act="padres">Zona de padres</button>` : ""}
-      <section class="card stack">
-        <h3>Qué vas a aprender</h3>
-        <div class="blocks">${BLOQUES.map(b => `<div class="row" style="gap:12px;flex-wrap:nowrap"><span class="blk-mini" style="flex:none;width:28px;height:28px;border-radius:8px;background:${b.color};color:#fff;display:grid;place-items:center;font-weight:800;font-size:.85rem">${b.num}</span><span><b>${esc(b.titulo)}</b> <span class="muted small">· ${esc(b.resumen)}</span></span></div>`).join("")}</div>
-      </section>
-      ${PIE}`;
-  }
+  // ---------- Inicio ----------
+  function pantallaInicio() {
+    const r = teDelDia();
+    const sellos = paisesSellados().length;
+    const totalPaises = Object.keys(BANDERAS).length;
+    const reto = estadoReto();
+    $app.innerHTML = `
+      <p class="saludo">${saludo()}. ¿Qué te apetece tomar?</p>
 
-  // --- Crear perfil ---
-  function vNuevo() {
-    const color = params.color || COLORES[datos.perfiles.length % COLORES.length];
-    return `${topbar(false)}
-      <section class="card form">
-        <h2>Nuevo perfil</h2>
-        <p class="muted">Escribe solo un apodo o tu nombre de pila. No hace falta nada más.</p>
-        <label for="apodo">Apodo</label>
-        <input id="apodo" type="text" maxlength="16" autocomplete="off" placeholder="Por ejemplo: Lucía" value="${esc(params.nombre || "")}">
-        <label>Color</label>
-        <div class="colors">${COLORES.map(c => `<button type="button" data-act="color" data-c="${c}" style="background:${c}" aria-label="Color" aria-pressed="${c === color}"></button>`).join("")}</div>
-        <p id="err" class="small" style="color:var(--bad)" hidden>Escribe un apodo para continuar.</p>
-        <div class="row"><button class="btn" data-act="crear" data-c="${color}">Crear perfil</button><button class="btn ghost" data-act="inicio">Cancelar</button></div>
-      </section>`;
-  }
-
-  // --- Mapa de bloques del niño ---
-  function vMapa() {
-    const p = perfilActual();
-    if (!p) return vInicio();
-    const obl = bloquesObligatorios();
-    const medallas = BLOQUES.map(b => `<span class="medal ${dominado(p, b.id) ? "on" : ""}" title="${esc(b.titulo)}">${b.num}</span>`).join("");
-    const desbloq = examenDesbloqueado(p);
-    const faltan = obl.filter(b => !dominado(p, b.id)).length;
-    return `${topbar(true)}
-      <section class="card kid-head">
-        <span class="avatar" style="background:${p.color}">${esc(p.nombre.charAt(0).toUpperCase())}</span>
-        <div class="info">
-          <h2>¡Hola, ${esc(p.nombre)}!</h2>
-          <div class="row small muted" style="justify-content:space-between"><span>Tu camino a la Primera Comunión</span><b style="color:var(--marian)">${progresoGlobal(p)}%</b></div>
-          <div class="progress" aria-hidden="true"><span style="width:${progresoGlobal(p)}%"></span></div>
-          <div class="medals" aria-label="Medallas">${medallas}</div>
-        </div>
-      </section>
-      ${p.nivelFinal ? `<button class="btn gold block" data-act="final">Ver mi nivel «Preparado»</button>` : ""}
-      <section class="stack">
-        <h2>Temas</h2>
-        <div class="blocks">${BLOQUES.map(b => tarjetaBloque(p, b)).join("")}</div>
-      </section>
-      <section class="card exam-card ${desbloq ? "" : "locked"} stack">
-        <p class="eyebrow">Examen final</p>
-        <h3>${desbloq ? "¡Ya puedes hacer el examen final!" : "El examen final está bloqueado"}</h3>
-        <p class="muted small">${desbloq
-          ? `${obl.length * CONFIG.preguntasExamenPorBloque} preguntas de todos los temas. Necesitas un ${CONFIG.aciertoMinimo}% para conseguir el nivel final.`
-          : `Te ${faltan === 1 ? "falta 1 tema" : `faltan ${faltan} temas`} por dominar. Un tema está dominado cuando sacas un ${CONFIG.aciertoMinimo}% o más en tus últimos ${CONFIG.intentosParaDominar} intentos.`}</p>
-        ${desbloq ? `<button class="btn gold" data-act="examen">Empezar examen</button>` : ""}
-      </section>
-      <button class="btn ghost" data-act="padres">Zona de padres</button>
-      ${PIE}`;
-  }
-  function tarjetaBloque(p, b) {
-    const ints = (p.intentos[b.id] || []).slice(-CONFIG.intentosParaDominar);
-    let estado;
-    if (dominado(p, b.id)) estado = `<span class="state done">Dominado</span>`;
-    else if (ints.length) estado = `<span class="state going">Último: ${ints[ints.length - 1]}%</span>`;
-    else if (esExtra(b)) estado = `<span class="state extra">Extra</span>`;
-    else estado = `<span class="state new">Sin empezar</span>`;
-    const dots = Array.from({ length: CONFIG.intentosParaDominar }, (_, k) => {
-      const v = ints[k];
-      return `<i class="${v === undefined ? "" : v >= CONFIG.aciertoMinimo ? "ok" : "ko"}"></i>`;
-    }).join("");
-    return `<button class="blk" data-act="bloque" data-id="${b.id}">
-      <span class="num" style="background:${b.color}">${b.num}</span>
-      <span class="txt"><span class="ttl">${esc(b.titulo)}</span><br><span class="sub">${esc(b.resumen)}</span><span class="dots" aria-hidden="true">${dots}</span></span>
-      ${estado}
-    </button>`;
-  }
-
-  // --- Bloque: lecciones + botón jugar ---
-  function vBloque() {
-    const p = perfilActual(); const b = bloque(params.id);
-    if (!p || !b) return vMapa();
-    const ints = p.intentos[b.id] || [];
-    return `${topbar(true)}
-      <button class="iconbtn" data-act="mapa" style="align-self:flex-start">← Volver a los temas</button>
-      <section class="stack">
-        <p class="eyebrow" style="color:${b.color}">Tema ${b.num}${esExtra(b) ? " · extra" : ""}</p>
-        <h1>${esc(b.titulo)}</h1>
-        <p class="muted">${esc(b.resumen)}</p>
-      </section>
-      <section class="card stack" style="border:2px solid ${b.color}">
-        <div class="row" style="justify-content:space-between">
-          <div><h3>¿Preparado para jugar?</h3><p class="muted small">${CONFIG.preguntasPorPartida} preguntas · ${dominado(p, b.id) ? "¡Tema dominado!" : `Intentos: ${ints.length}`}</p></div>
-          <button class="btn" data-act="jugar" data-id="${b.id}">Jugar</button>
-        </div>
-      </section>
-      ${b.id === "ros" ? `<button class="btn gold block" data-act="rosario">Rezar el Rosario paso a paso</button>` : ""}
-      ${b.id === "via" ? `<button class="btn gold block" data-act="via">Rezar el Vía Crucis paso a paso</button>` : ""}
-      <h2>Aprende</h2>
-      <div class="lesson-list">${b.lecciones.map(l => `<article class="card lesson ${l.oracion ? "prayer" : ""}">
-          ${l.oracion ? `<p class="eyebrow">Oración</p>` : ""}
-          <h3>${esc(l.t)}</h3><p class="x">${esc(l.x)}</p></article>`).join("")}</div>
-      <button class="btn block" data-act="jugar" data-id="${b.id}">Jugar a las preguntas</button>`;
-  }
-
-  // --- Partida ---
-  function empezar(tipo, bid) {
-    const p = perfilActual();
-    let preguntas;
-    if (tipo === "examen") {
-      preguntas = barajar(bloquesObligatorios().flatMap(b => elegir(p, b, CONFIG.preguntasExamenPorBloque)));
-    } else {
-      preguntas = elegir(p, bloque(bid), CONFIG.preguntasPorPartida);
-    }
-    juego = { tipo, bid, preguntas, i: 0, aciertos: 0, racha: 0, puntos: 0, respuesta: null };
-    ir("juego");
-  }
-  function vJuego() {
-    const p = perfilActual();
-    if (!juego || !p) return vMapa();
-    const q = juego.preguntas[juego.i];
-    const titulo = juego.tipo === "examen" ? "Examen final" : bloque(juego.bid).titulo;
-    const r = juego.respuesta;
-    const opts = q.opts.map((o, k) => {
-      let cls = "opt";
-      if (r !== null) {
-        if (o === q.correcta) cls += " right";
-        else if (k === r) cls += " wrong";
-      }
-      return `<button class="${cls}" data-act="responder" data-k="${k}" ${r !== null ? "disabled" : ""}>${esc(o)}</button>`;
-    }).join("");
-    const acerto = r !== null && q.opts[r] === q.correcta;
-    return `${topbar(true)}
-      <div class="qhead">
-        <button class="iconbtn" data-act="salir">← Salir</button>
-        <span class="qcount">${juego.i + 1} / ${juego.preguntas.length}</span>
+      <div class="tarjeta destacado" data-ir="#/r/${r.id}">
+        <div class="sobre">Té del día · ${bandera(r.p)} ${esc(r.p)}</div>
+        <h2>${esc(r.n)}</h2>
+        <div>${NOMBRE_TIPO[r.t]} · ${tiempoTexto(r)} · ${NOMBRE_CAF[r.caf]}</div>
+        <button class="btn">Ver receta</button>
+        <div class="emoji-grande">${ICONO_TIPO[r.t]}</div>
       </div>
-      <div class="progress" aria-hidden="true"><span style="width:${(juego.i / juego.preguntas.length) * 100}%"></span></div>
-      <p class="eyebrow">${esc(titulo)}${juego.racha >= 2 ? ` · <span class="streak">¡Racha de ${juego.racha}!</span>` : ""}</p>
-      <h2 class="question">${esc(q.q)}</h2>
-      <div class="options">${opts}</div>
-      ${r !== null ? `<div class="feedback ${acerto ? "ok" : "ko"} pop">
-          <b>${acerto ? "¡Muy bien!" : "Casi. La respuesta correcta es:"}</b>
-          ${acerto ? "" : `<span><b style="color:var(--ink)">${esc(q.correcta)}</b></span>`}
-          <span>${esc(q.exp)}</span>
-        </div>
-        <button class="btn block" data-act="siguiente">${juego.i + 1 < juego.preguntas.length ? "Siguiente" : "Ver resultado"}</button>` : ""}`;
-  }
-  function responder(k) {
-    if (!juego || juego.respuesta !== null) return;
-    const p = perfilActual();
-    const q = juego.preguntas[juego.i];
-    juego.respuesta = k;
-    if (q.opts[k] === q.correcta) {
-      juego.aciertos++; juego.racha++;
-      juego.puntos += CONFIG.puntosPorAcierto;
-      if (juego.racha % 3 === 0) juego.puntos += CONFIG.puntosPorRacha;
-      if (p.fallos[q.qid]) p.fallos[q.qid] = Math.max(0, p.fallos[q.qid] - 1);
-    } else {
-      juego.racha = 0;
-      p.fallos[q.qid] = (p.fallos[q.qid] || 0) + 1;
-      p.fallosTotales[q.qid] = (p.fallosTotales[q.qid] || 0) + 1;
-    }
-    guardar(); render();
-  }
-  function siguiente() {
-    if (juego.i + 1 < juego.preguntas.length) { juego.i++; juego.respuesta = null; render(); arriba(); return; }
-    // fin de la partida
-    const p = perfilActual();
-    const pct = Math.round((juego.aciertos / juego.preguntas.length) * 100);
-    p.puntos += juego.puntos;
-    let nuevoFinal = false;
-    if (juego.tipo === "examen") {
-      p.examenes.push(pct);
-      if (pct >= CONFIG.aciertoMinimo && !p.nivelFinal) { p.nivelFinal = true; nuevoFinal = true; }
-    } else {
-      const antes = dominado(p, juego.bid);
-      (p.intentos[juego.bid] = p.intentos[juego.bid] || []).push(pct);
-      p.intentos[juego.bid] = p.intentos[juego.bid].slice(-10);
-      juego.recienDominado = !antes && dominado(p, juego.bid);
-    }
-    guardar();
-    juego.pct = pct;
-    if (nuevoFinal) ir("final"); else ir("resultado");
-  }
 
-  // --- Resultado de una partida ---
-  function vResultado() {
-    const p = perfilActual();
-    if (!juego || !p) return vMapa();
-    const ok = juego.pct >= CONFIG.aciertoMinimo;
-    let mensaje, extra = "";
-    if (juego.tipo === "examen") {
-      mensaje = ok ? "¡Examen superado!" : "¡Buen intento!";
-      extra = ok ? "" : `Necesitas un ${CONFIG.aciertoMinimo}%. Repasa los temas en los que has fallado y vuelve a intentarlo.`;
-    } else {
-      const b = bloque(juego.bid);
-      const ints = p.intentos[b.id].slice(-CONFIG.intentosParaDominar);
-      if (juego.recienDominado) { mensaje = "¡Medalla conseguida!"; extra = `Has dominado «${b.titulo}».`; }
-      else if (dominado(p, b.id)) { mensaje = "¡Sigues dominando este tema!"; }
-      else if (ok) {
-        const seguidos = (() => { let c = 0; for (let k = ints.length - 1; k >= 0 && ints[k] >= CONFIG.aciertoMinimo; k--) c++; return c; })();
-        mensaje = "¡Muy bien!";
-        extra = `Llevas ${seguidos} de ${CONFIG.intentosParaDominar} partidas seguidas con ${CONFIG.aciertoMinimo}% o más. Cuando las tengas, conseguirás la medalla.`;
-      } else { mensaje = "¡Sigue practicando!"; extra = `Lee otra vez el tema y vuelve a jugar. Para la medalla necesitas ${CONFIG.intentosParaDominar} partidas seguidas con ${CONFIG.aciertoMinimo}% o más.`; }
-    }
-    return `${topbar(true)}
-      <section class="card stack result">
-        <p class="eyebrow">${juego.tipo === "examen" ? "Examen final" : esc(bloque(juego.bid).titulo)}</p>
-        <div class="score ${ok ? "ok" : "ko"}">${juego.pct}%</div>
-        <p class="muted">${juego.aciertos} de ${juego.preguntas.length} aciertos · +${juego.puntos} puntos</p>
-        <h2>${mensaje}</h2>
-        ${extra ? `<p class="muted">${esc(extra)}</p>` : ""}
-      </section>
-      <div class="stack">
-        ${juego.tipo === "examen" ? `<button class="btn" data-act="examen">Repetir examen</button>` : `<button class="btn" data-act="jugar" data-id="${juego.bid}">Jugar otra vez</button><button class="btn ghost" data-act="bloque" data-id="${juego.bid}">Repasar el tema</button>`}
-        <button class="btn ghost" data-act="mapa">Volver a los temas</button>
+      <h3 class="seccion">Busca por lo que necesitas</h3>
+      <div class="accesos">
+        <button class="acceso" data-filtro='{"tipo":"caliente"}'><span>☕</span><b>Calientes</b><small class="suave">Tés e infusiones</small></button>
+        <button class="acceso" data-filtro='{"tipo":"frio"}'><span>🧊</span><b>Fríos</b><small class="suave">Para el calor</small></button>
+        <button class="acceso" data-filtro='{"ef":"energia"}'><span>⚡</span><b>Energía</b><small class="suave">Para despertar</small></button>
+        <button class="acceso" data-filtro='{"ef":"dormir"}'><span>😴</span><b>Para dormir</b><small class="suave">Sin cafeína</small></button>
+        <button class="acceso" data-filtro='{"ef":"digestion"}'><span>🌿</span><b>Digestión</b><small class="suave">Después de comer</small></button>
+        <button class="acceso" data-filtro='{"tipo":"especial"}'><span>🍹</span><b>Especiales</b><small class="suave">Sin alcohol</small></button>
+      </div>
+
+      <h3 class="seccion">Tu progreso</h3>
+      <div class="resumen">
+        <div class="tarjeta" data-ir="#/pasaporte"><b>${sellos}/${totalPaises}</b><small class="suave">sellos del pasaporte</small></div>
+        <div class="tarjeta" data-ir="#/vitalidad"><b>${reto ? reto.hechos : 0}/30</b><small class="suave">días del reto</small></div>
+        <div class="tarjeta" data-filtro='{"fav":true}'><b>${datos.fav.length}</b><small class="suave">favoritos</small></div>
       </div>`;
   }
 
-  // --- Nivel final ---
-  function vFinal() {
-    const p = perfilActual();
-    if (!p) return vInicio();
-    return `${topbar(true)}
-      <section class="celebrate stack">
-        ${CALIZ}
-        <p class="eyebrow" style="color:inherit;opacity:.85">Nivel «Preparado»</p>
-        <h1>¡Has superado todo el repaso, ${esc(p.nombre)}!</h1>
-        <p>Has aprendido la historia de Dios con su pueblo, la vida de Jesús, los sacramentos, los mandamientos, las oraciones, la Misa, el Rosario y el Vía Crucis.</p>
-      </section>
-      <section class="card stack">
-        <h3>¿Y ahora?</h3>
-        <p>Enseña este resultado a tu catequista. Tu catequista y tu párroco te acompañarán en el último paso hacia tu Primera Comunión.</p>
-        <p class="muted small">Puedes seguir jugando para no olvidar nada y para ganar más puntos.</p>
-      </section>
-      <button class="btn block" data-act="mapa">Volver a los temas</button>`;
+  // ---------- Lista de recetas con buscador y filtros ----------
+  let filtro = { q: "", tipo: "", ef: "", sinCaf: false, fav: false, pais: "" };
+
+  function pantallaRecetas() {
+    const tipos = [["", "Todas"], ["caliente", "☕ Calientes"], ["frio", "🧊 Fríos"], ["especial", "🍹 Especiales"], ["vitalidad", "🌿 Vitalidad"]];
+    $app.innerHTML = `
+      <input class="buscador" id="buscar" type="search" placeholder="Buscar: chai, menta, Japón…" value="${esc(filtro.q)}" autocomplete="off">
+      <div class="chips">
+        ${tipos.map(([v, t]) => `<button class="chip ${filtro.tipo === v ? "on" : ""}" data-tipo="${v}">${t}</button>`).join("")}
+      </div>
+      <div class="chips">
+        <button class="chip ${filtro.fav ? "on" : ""}" data-toggle="fav">⭐ Favoritos</button>
+        <button class="chip ${filtro.sinCaf ? "on" : ""}" data-toggle="sinCaf">🚫 Sin cafeína</button>
+        ${Object.entries(EFECTOS).map(([k, t]) => `<button class="chip ${filtro.ef === k ? "on" : ""}" data-ef="${k}">${t}</button>`).join("")}
+      </div>
+      ${filtro.pais ? `<div class="chips"><button class="chip on" data-quitar-pais>${bandera(filtro.pais)} ${esc(filtro.pais)} ✕</button></div>` : ""}
+      <div id="lista"></div>`;
+    pintarLista();
+    document.getElementById("buscar").addEventListener("input", e => { filtro.q = e.target.value; pintarLista(); });
   }
 
-  // --- Zona de padres ---
-  function vPadres() {
-    const perfiles = datos.perfiles;
-    if (!perfiles.length) return vInicio();
-    const sel = perfiles.find(p => p.id === params.id) || perfilActual() || perfiles[0];
-    const filas = BLOQUES.map(b => {
-      const ints = sel.intentos[b.id] || [];
-      const ult = ints.slice(-CONFIG.intentosParaDominar);
-      return `<tr><td>${b.num}. ${esc(b.titulo)}${esExtra(b) ? ' <span class="muted small">(extra)</span>' : ""}</td>
-        <td class="num">${ints.length}</td>
-        <td class="num">${ult.length ? ult.map(x => x + "%").join(" · ") : "—"}</td>
-        <td>${dominado(sel, b.id) ? '<span class="state done">Dominado</span>' : ints.length ? '<span class="state going">En curso</span>' : '<span class="state new">Sin empezar</span>'}</td></tr>`;
-    }).join("");
-    const falladas = Object.entries(sel.fallosTotales || {}).sort((a, c) => c[1] - a[1]).slice(0, 6).map(([qid, n]) => {
-      const [bid, idx] = qid.split("-"); const b = bloque(bid); if (!b || !b.preguntas[idx]) return "";
-      const pr = b.preguntas[idx];
-      return `<li><b>${esc(pr[0])}</b><br><span class="small muted">${esc(b.titulo)} · fallada ${n} ${n === 1 ? "vez" : "veces"} · Respuesta: ${esc(pr[1][0])}</span></li>`;
-    }).join("");
-    return `${topbar(false)}
-      <button class="iconbtn" data-act="${perfilActual() ? "mapa" : "inicio"}" style="align-self:flex-start">← Volver</button>
-      <section class="stack">
-        <p class="eyebrow">Zona de padres</p>
-        <h1>Progreso en la catequesis</h1>
-        <p class="muted">Aquí veis cómo va cada niño y qué preguntas le cuestan más, para repasarlas juntos en casa.</p>
-      </section>
-      <div class="tabs" role="tablist">${perfiles.map(p => `<button role="tab" aria-selected="${p.id === sel.id}" data-act="padres" data-id="${p.id}">${esc(p.nombre)}</button>`).join("")}</div>
-      <section class="card stack">
-        <div class="row" style="justify-content:space-between"><h3>${esc(sel.nombre)}</h3><span class="chip-pts">${sel.puntos}</span></div>
-        <p class="muted small">Progreso total: <b>${progresoGlobal(sel)}%</b> · Examen final: <b>${sel.nivelFinal ? "superado" : sel.examenes.length ? `último ${sel.examenes[sel.examenes.length - 1]}%` : "aún no"}</b></p>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Tema</th><th>Partidas</th><th>Últimas ${CONFIG.intentosParaDominar}</th><th>Estado</th></tr></thead>
-          <tbody>${filas}</tbody></table></div>
-      </section>
-      <section class="card stack">
-        <h3>Preguntas que más le cuestan</h3>
-        ${falladas ? `<ul class="fail-list">${falladas}</ul>` : `<p class="muted">Todavía no hay fallos registrados. Cuando juegue, aparecerán aquí.</p>`}
-      </section>
-      <section class="card stack">
-        <h3>Sobre la app</h3>
-        <p class="small">Contenido basado en la doctrina de la Iglesia Católica, Apostólica y Romana, preparado para la catequesis de la ${esc(CONFIG.parroquia)} (${esc(CONFIG.ciudad)}), diócesis de ${esc(CONFIG.diocesis)}. Versión de prueba pendiente de revisión.</p>
-        <p class="small muted">Privacidad: la app no pide datos personales, no tiene publicidad ni envía nada a internet. Todo se guarda en este dispositivo.</p>
-        ${params.borrar === sel.id
-          ? `<div class="confirm"><b>¿Borrar el perfil de ${esc(sel.nombre)} y todo su progreso?</b><span class="small">No se puede deshacer.</span><div class="row"><button class="btn small" style="background:var(--bad);color:#fff" data-act="borrarSi" data-id="${sel.id}">Sí, borrar</button><button class="btn small ghost" data-act="padres" data-id="${sel.id}">Cancelar</button></div></div>`
-          : `<button class="btn small ghost" data-act="borrar" data-id="${sel.id}" style="align-self:flex-start">Borrar este perfil</button>`}
-      </section>`;
-  }
-
-  /* ------------------------------------------------------------------ *
-   * 8. ROSARIO INTERACTIVO                                              *
-   * ------------------------------------------------------------------ */
-  // Grupo de misterios según el día de la semana
-  function misteriosDeHoy() {
-    const d = new Date().getDay();
-    return Object.keys(MISTERIOS).find(k => MISTERIOS[k].dias.includes(d)) || "gozosos";
-  }
-  // Construye la lista de pasos: cada paso dice qué cuenta se toca y qué oración se reza
-  function pasosRosario(grupo) {
-    const M = MISTERIOS[grupo];
-    const pasos = [];
-    pasos.push({ cuenta: "cruz", o: "senal" });
-    pasos.push({ cuenta: "cruz", o: "credo" });
-    pasos.push({ cuenta: "p1", o: "padrenuestro" });
-    ["fe", "esperanza", "caridad"].forEach((v, k) => pasos.push({ cuenta: "p" + (k + 2), o: "avemaria", nota: `Avemaría ${k + 1} de 3 · por la virtud de la ${v}` }));
-    for (let d = 0; d < 5; d++) {
-      const grande = d === 0 ? "p5" : "g" + d;
-      pasos.push({ cuenta: grande, o: "gloria" });
-      if (d > 0) pasos.push({ cuenta: grande, o: "ohjesus" });
-      pasos.push({ cuenta: grande, o: "padrenuestro", misterio: d, anuncio: true });
-      for (let a = 0; a < 10; a++) pasos.push({ cuenta: `d${d}-${a}`, o: "avemaria", misterio: d, nota: `Avemaría ${a + 1} de 10` });
-    }
-    pasos.push({ cuenta: "medalla", o: "gloria", misterio: 4 });
-    pasos.push({ cuenta: "medalla", o: "ohjesus", misterio: 4 });
-    pasos.push({ cuenta: "medalla", o: "salve" });
-    return pasos.map(s => Object.assign(s, { grupo, nombreGrupo: M.nombre }));
-  }
-  function abrirRosario() {
-    const g = misteriosDeHoy();
-    rosario = { grupo: g, pasos: pasosRosario(g), i: 0 };
-    ir("rosario");
-  }
-  function vRosario() {
-    if (!rosario) return vMapa();
-    const s = rosario.pasos[rosario.i];
-    const or = ORACIONES[s.o];
-    const M = MISTERIOS[rosario.grupo];
-    const misterioTxt = s.misterio !== undefined ? `<div class="mystery"><b>${["Primer", "Segundo", "Tercer", "Cuarto", "Quinto"][s.misterio]} misterio ${M.nombre.replace("Misterios ", "").replace(/s$/, "")}:</b> ${esc(M.lista[s.misterio])}</div>` : "";
-    return `${topbar(false)}
-      <button class="iconbtn" data-act="bloque" data-id="ros" style="align-self:flex-start">← Volver al tema</button>
-      <section class="stack">
-        <p class="eyebrow">El Santo Rosario</p>
-        <h1>Rezamos juntos</h1>
-        <label class="small muted" for="grupo">Hoy toca: <b>${esc(MISTERIOS[misteriosDeHoy()].nombre.toLowerCase())}</b>. Puedes elegir otros:</label>
-        <select id="grupo" class="select" data-act="grupo">${Object.keys(MISTERIOS).map(k => `<option value="${k}" ${k === rosario.grupo ? "selected" : ""}>${MISTERIOS[k].nombre} (${MISTERIOS[k].diasTexto})</option>`).join("")}</select>
-      </section>
-      <div class="rosary-wrap">
-        <div class="card"><svg class="rosary-svg" id="rosary" viewBox="0 0 400 540" role="img" aria-label="Rosario: toca una cuenta para ir a esa oración"></svg></div>
-        <section class="card prayer-box">
-          <div class="row" style="justify-content:space-between"><p class="eyebrow">Paso ${rosario.i + 1} de ${rosario.pasos.length}</p>${s.nota ? `<span class="small" style="font-weight:800;color:var(--gold)">${esc(s.nota)}</span>` : ""}</div>
-          ${misterioTxt}
-          ${s.anuncio ? `<p class="small muted">Anunciamos el misterio, pensamos un momento en él y rezamos:</p>` : ""}
-          <h2>${esc(or.titulo)}</h2>
-          <p class="x">${esc(or.texto)}</p>
-          <div class="row" style="justify-content:space-between;margin-top:6px">
-            <button class="btn ghost" data-act="rosAnt" ${rosario.i === 0 ? "disabled" : ""}>Anterior</button>
-            ${rosario.i + 1 < rosario.pasos.length ? `<button class="btn" data-act="rosSig">Siguiente</button>` : `<button class="btn gold" data-act="bloque" data-id="ros">¡Terminado! Amén</button>`}
-          </div>
-        </section>
-      </div>`;
-  }
-  // Dibuja el rosario (55 cuentas + medalla + cruz) y marca la cuenta actual
-  function pintarRosario() {
-    const svg = document.getElementById("rosary");
-    if (!svg || !rosario) return;
-    const cx = 200, cy = 190, R = 150;
-    const cuentas = []; // {id, x, y, big}
-    // El aro: medalla abajo; desde ella, 5 decenas separadas por 4 cuentas grandes
-    const aro = [];
-    for (let d = 0; d < 5; d++) {
-      for (let a = 0; a < 10; a++) aro.push({ id: `d${d}-${a}`, big: false });
-      if (d < 4) aro.push({ id: "g" + (d + 1), big: true });
-    }
-    const huecos = aro.length + 1; // +1 por la medalla
-    aro.forEach((c, k) => {
-      const ang = Math.PI / 2 + ((k + 1) / huecos) * Math.PI * 2; // empieza junto a la medalla y da la vuelta completa al aro
-      cuentas.push({ ...c, x: cx + R * Math.cos(ang), y: cy + R * Math.sin(ang) });
+  function recetasFiltradas() {
+    const q = normal(filtro.q.trim());
+    return RECETAS.filter(r => {
+      if (filtro.tipo && r.t !== filtro.tipo) return false;
+      if (filtro.ef && !r.ef.includes(filtro.ef)) return false;
+      if (filtro.sinCaf && r.caf !== "no") return false;
+      if (filtro.fav && !esFav(r.id)) return false;
+      if (filtro.pais && r.p !== filtro.pais) return false;
+      if (q) {
+        const texto = normal([r.n, r.p, r.ing.join(" "), r.para].join(" "));
+        if (!texto.includes(q)) return false;
+      }
+      return true;
     });
-    const my = cy + R;
-    // El colgante: de la medalla hacia la cruz
-    const colg = [{ id: "p5", big: true, y: my + 34 }, { id: "p4", y: my + 62 }, { id: "p3", y: my + 84 }, { id: "p2", y: my + 106 }, { id: "p1", big: true, y: my + 136 }];
-    colg.forEach(c => cuentas.push({ ...c, big: !!c.big, x: cx }));
-
-    const actual = rosario.pasos[rosario.i].cuenta;
-    const ordenCuentas = []; // orden en que se recorren, para pintar las ya rezadas
-    rosario.pasos.forEach(s => { if (!ordenCuentas.includes(s.cuenta)) ordenCuentas.push(s.cuenta); });
-    const idxActual = ordenCuentas.indexOf(actual);
-    const hecha = id => ordenCuentas.indexOf(id) < idxActual;
-
-    let html = `<circle class="chain" cx="${cx}" cy="${cy}" r="${R}"/><line class="chain" x1="${cx}" y1="${my}" x2="${cx}" y2="${my + 160}"/>`;
-    cuentas.forEach(c => {
-      const r = c.big ? 11 : 7.5;
-      const cls = `bead ${c.big ? "big" : ""} ${c.id === actual ? "now" : hecha(c.id) ? "done" : ""}`;
-      html += `<circle class="${cls}" cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="${r}" data-cuenta="${c.id}"><title>${c.id}</title></circle>`;
-    });
-    html += `<path class="medalmark ${actual === "medalla" ? "now" : ""}" data-cuenta="medalla" d="M${cx} ${my - 14} l12 14 l-12 14 l-12 -14z"/>`;
-    const cyC = my + 172;
-    html += `<path class="crossmark ${actual === "cruz" ? "now" : ""}" data-cuenta="cruz" d="M${cx - 5} ${cyC - 14}h10v14h12v10h-12v26h-10v-26h-12v-10h12z"/>`;
-    svg.innerHTML = html;
   }
 
-
-  /* ------------------------------------------------------------------ *
-   * 8b. VÍA CRUCIS PASO A PASO                                          *
-   *    Paso 0: inicio · pasos 1-14: estaciones · último: final          *
-   * ------------------------------------------------------------------ */
-  function vVia() {
-    if (!via) return vMapa();
-    const n = VIA_CRUCIS.length, i = via.i;
-    const ROMANOS = ["I","II","III","IV","V","VI","VII","VIII","IX","X","XI","XII","XIII","XIV"];
-    let cuerpo;
-    if (i === 0) {
-      cuerpo = `<p class="eyebrow">Comenzamos</p><h2>Acompañamos a Jesús</h2>
-        <p class="x">Nos ponemos en presencia de Dios y hacemos la señal de la cruz.\n\n${esc(ORACIONES.senal.texto)}</p>`;
-    } else if (i <= n) {
-      const e = VIA_CRUCIS[i - 1];
-      cuerpo = `<p class="eyebrow">Estación ${ROMANOS[i - 1]} · ${i} de ${n}</p><h2>${esc(e.t)}</h2>
-        <div class="mystery"><b>Guía:</b> Te adoramos, oh Cristo, y te bendecimos.<br><b>Todos:</b> Que por tu santa cruz redimiste al mundo.</div>
-        <p class="x">${esc(e.r)}</p>
-        <p class="small muted">Rezamos un Padre Nuestro.</p>`;
-    } else {
-      cuerpo = `<p class="eyebrow">Final</p><h2>¡Jesús resucitó!</h2>
-        <p class="x">Jesús no se quedó en el sepulcro: al tercer día resucitó. Le damos gracias por su amor.\n\n${esc(ORACIONES.gloria.texto)}</p>`;
-    }
-    const pct = Math.round((i / (n + 1)) * 100);
-    return `${topbar(false)}
-      <button class="iconbtn" data-act="bloque" data-id="via" style="align-self:flex-start">← Volver al tema</button>
-      <section class="stack"><p class="eyebrow">El Vía Crucis</p><h1>Camino de la cruz</h1></section>
-      <div class="progress" aria-hidden="true"><span style="width:${pct}%"></span></div>
-      <section class="card prayer-box">
-        ${cuerpo}
-        <div class="row" style="justify-content:space-between;margin-top:6px">
-          <button class="btn ghost" data-act="viaAnt" ${i === 0 ? "disabled" : ""}>Anterior</button>
-          ${i <= n ? `<button class="btn" data-act="viaSig">${i === 0 ? "Empezar" : "Siguiente"}</button>` : `<button class="btn gold" data-act="bloque" data-id="via">Terminar. Amén</button>`}
-        </div>
-      </section>`;
-  }
-
-  /* ------------------------------------------------------------------ *
-   * 9. EVENTOS (toques y clics)                                         *
-   * ------------------------------------------------------------------ */
-  $app.addEventListener("click", ev => {
-    const cuentaEl = ev.target.closest("[data-cuenta]");
-    if (cuentaEl && rosario) {
-      const k = rosario.pasos.findIndex(s => s.cuenta === cuentaEl.dataset.cuenta);
-      if (k >= 0) { rosario.i = k; render(); }
+  function pintarLista() {
+    const lista = recetasFiltradas();
+    const $l = document.getElementById("lista");
+    if (!lista.length) {
+      $l.innerHTML = `<div class="vacio">No hay recetas con esos filtros.<br><br><button class="btn sec" data-limpiar>Quitar filtros</button></div>`;
       return;
     }
-    const el = ev.target.closest("[data-act]");
-    if (!el || el.tagName === "SELECT") return;
-    const act = el.dataset.act, id = el.dataset.id;
-    switch (act) {
-      case "inicio": datos.actual = null; guardar(); ir("inicio"); break;
-      case "nuevo": ir("nuevo"); break;
-      case "color": ir("nuevo", { color: el.dataset.c, nombre: document.getElementById("apodo").value }); break;
-      case "crear": {
-        const nombre = document.getElementById("apodo").value.trim();
-        if (!nombre) { document.getElementById("err").hidden = false; return; }
-        const p = { id: "p" + Date.now().toString(36), nombre: nombre.slice(0, 16), color: el.dataset.c, puntos: 0, intentos: {}, fallos: {}, fallosTotales: {}, examenes: [], nivelFinal: false };
-        datos.perfiles.push(p); datos.actual = p.id; guardar(); ir("mapa");
-        break;
-      }
-      case "elegir": datos.actual = id; guardar(); ir("mapa"); break;
-      case "mapa": ir("mapa"); break;
-      case "bloque": ir("bloque", { id }); break;
-      case "jugar": empezar("bloque", id); break;
-      case "examen": empezar("examen"); break;
-      case "responder": responder(Number(el.dataset.k)); break;
-      case "siguiente": siguiente(); break;
-      case "salir": {
-        const volverA = juego && juego.tipo === "bloque" ? juego.bid : null;
-        juego = null;
-        if (volverA) ir("bloque", { id: volverA }); else ir("mapa");
-        break;
-      }
-      case "final": ir("final"); break;
-      case "padres": ir("padres", { id }); break;
-      case "borrar": ir("padres", { id, borrar: id }); break;
-      case "borrarSi":
-        datos.perfiles = datos.perfiles.filter(p => p.id !== id);
-        if (datos.actual === id) datos.actual = null;
-        guardar(); ir(datos.perfiles.length ? "padres" : "inicio");
-        break;
-      case "rosario": abrirRosario(); break;
-      case "rosSig": if (rosario.i + 1 < rosario.pasos.length) { rosario.i++; render(); } break;
-      case "rosAnt": if (rosario.i > 0) { rosario.i--; render(); } break;
-      case "via": via = { i: 0 }; ir("via"); break;
-      case "viaSig": if (via.i < VIA_CRUCIS.length + 1) { via.i++; render(); arriba(); } break;
-      case "viaAnt": if (via.i > 0) { via.i--; render(); arriba(); } break;
+    $l.innerHTML = `<div class="contador">${lista.length} ${lista.length === 1 ? "receta" : "recetas"}</div>` +
+      lista.map(filaReceta).join("");
+  }
+
+  function filaReceta(r) {
+    const hecha = datos.hechas[r.id];
+    return `
+      <a class="fila" href="#/r/${r.id}">
+        <div class="ico ${r.t}">${ICONO_TIPO[r.t]}</div>
+        <div class="txt">
+          <b>${esc(r.n)}</b>
+          <small>${bandera(r.p)} ${esc(r.p)} · ${tiempoTexto(r)} · ${NOMBRE_CAF[r.caf]}</small>
+        </div>
+        <div class="marca">${esFav(r.id) ? "⭐" : ""}${hecha ? "✅" : ""}</div>
+      </a>`;
+  }
+
+  // ---------- Ficha de una receta ----------
+  function pantallaFicha(id) {
+    const r = POR_ID[id];
+    if (!r) return ir("#/recetas");
+    $titulo.textContent = r.n;
+    const veces = datos.hechas[r.id] || 0;
+    $app.innerHTML = `
+      <div class="ficha">
+        <div class="ficha-cab">
+          <div class="bandera">${bandera(r.p)}</div>
+          <h2>${esc(r.n)}</h2>
+          <div class="suave">${esc(r.p)} · ${r.c === "te" ? "Té" : "Infusión"} · ${NOMBRE_TIPO[r.t]}${r.mom ? " · " + MOMENTOS[r.mom] + " " + r.mom : ""}</div>
+          <div style="margin-top:8px">${r.ef.map(e => `<span class="etiqueta">${EFECTOS[e]}</span>`).join("")}<span class="etiqueta caf-${r.caf}">${NOMBRE_CAF[r.caf]}</span></div>
+        </div>
+
+        <div class="datos">
+          <div class="dato"><b>${r.temp ? r.temp + " ºC" : "—"}</b><small>Agua</small></div>
+          <div class="dato"><b>${r.seg ? tiempoTexto(r) : "⏳"}</b><small>${r.seg ? "Reposo" : esc(r.espera)}</small></div>
+          <div class="dato"><b>${veces}</b><small>${veces === 1 ? "vez hecha" : "veces hecha"}</small></div>
+        </div>
+
+        <div class="acciones">
+          ${r.seg ? `<a class="btn" href="#/t/${r.id}">⏱ Empezar</a>` : `<button class="btn" data-hecha="${r.id}">✔ La he preparado</button>`}
+          <button class="btn sec" data-fav="${r.id}">${esFav(r.id) ? "⭐ Favorita" : "☆ Favorita"}</button>
+        </div>
+
+        <div class="tarjeta"><h3>Ingredientes</h3><ul>${r.ing.map(i => `<li>${esc(i)}</li>`).join("")}</ul></div>
+        <div class="tarjeta"><h3>Preparación</h3><ol>${r.pasos.map(p => `<li>${esc(p)}</li>`).join("")}</ol></div>
+        <div class="tarjeta"><h3>¿Para qué se toma?</h3><p style="margin:0">${esc(r.para)}</p></div>
+        <div class="tarjeta"><h3>Origen e historia</h3><p style="margin:0">${esc(r.hist)}</p></div>
+        ${r.prec ? `<div class="aviso">⚠️ <b>Precauciones:</b> ${esc(r.prec)}</div>` : ""}
+        <p class="suave pequeño">Los usos indicados son tradicionales, no consejos médicos.</p>
+      </div>`;
+  }
+
+  // ---------- Temporizador con ritual ----------
+  let temp = null; // { id, fin, total, resto, pausado, tic, bloqueo }
+
+  function pantallaTemporizador(id) {
+    const r = POR_ID[id];
+    if (!r || !r.seg) return ir("#/recetas");
+    $titulo.textContent = "Reposando…";
+    pararTemporizador();
+    temp = { id, total: r.seg * 1000, resto: r.seg * 1000, fin: Date.now() + r.seg * 1000, pausado: false, tic: null, bloqueo: null };
+    $app.innerHTML = `
+      <div class="ritual">
+        <div class="suave">${bandera(r.p)} ${esc(r.n)}${r.temp ? " · agua a " + r.temp + " ºC" : ""}</div>
+        <div class="reloj" id="reloj">--:--</div>
+        <div class="barra-progreso"><i id="progreso"></i></div>
+        <div class="respira" id="respira"><span id="textoRespira">Inspira</span></div>
+        <p class="curioso">💡 ${esc(r.dato)}</p>
+        <div class="acciones" id="botonesTemp">
+          <button class="btn sec" data-pausa>⏸ Pausa</button>
+          <a class="btn sec" href="#/r/${r.id}">Cancelar</a>
+        </div>
+      </div>`;
+    mantenerPantallaEncendida();
+    temp.tic = setInterval(actualizarTemporizador, 250);
+    actualizarTemporizador();
+  }
+
+  function actualizarTemporizador() {
+    if (!temp) return;
+    const resto = temp.pausado ? temp.resto : Math.max(0, temp.fin - Date.now());
+    const s = Math.ceil(resto / 1000);
+    const $reloj = document.getElementById("reloj");
+    if (!$reloj) return pararTemporizador();
+    $reloj.textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+    document.getElementById("progreso").style.width = (100 - (resto / temp.total) * 100) + "%";
+    // Respiración: 4 segundos inspirar, 4 segundos espirar (coincide con la animación)
+    const transcurrido = (temp.total - resto) / 1000;
+    document.getElementById("textoRespira").textContent = (Math.floor(transcurrido / 4) % 2 === 0) ? "Inspira" : "Espira";
+    if (resto <= 0) terminarTemporizador();
+  }
+
+  function terminarTemporizador() {
+    const id = temp.id;
+    pararTemporizador();
+    sonar();
+    if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]);
+    $titulo.textContent = "¡Listo!";
+    document.getElementById("respira").classList.add("parado");
+    const $t = document.getElementById("textoRespira"); $t.textContent = "🍵"; $t.style.fontSize = "64px";
+    document.getElementById("reloj").outerHTML = `<div class="listo">¡Tu té está listo!</div>`;
+    document.getElementById("botonesTemp").innerHTML = `
+      <button class="btn ancho" data-hecha="${id}" data-volver="1">✔ Sellar en el pasaporte</button>`;
+  }
+
+  function pararTemporizador() {
+    if (!temp) return;
+    clearInterval(temp.tic);
+    if (temp.bloqueo) { try { temp.bloqueo.release(); } catch (e) {} }
+    temp = null;
+  }
+
+  // Evita que la pantalla se apague mientras reposa el té (si el móvil lo permite)
+  async function mantenerPantallaEncendida() {
+    try { if (navigator.wakeLock && temp) temp.bloqueo = await navigator.wakeLock.request("screen"); } catch (e) {}
+  }
+
+  // Tres pitidos suaves generados por el propio móvil (no hace falta ningún archivo de sonido)
+  function sonar() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      [0, 0.45, 0.9].forEach(t => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = "sine"; o.frequency.value = 880;
+        g.gain.setValueAtTime(0.0001, ctx.currentTime + t);
+        g.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + t + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + t + 0.35);
+        o.connect(g).connect(ctx.destination);
+        o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.4);
+      });
+    } catch (e) {}
+  }
+
+  // ---------- Pasaporte ----------
+  function paisesSellados() {
+    const set = new Set();
+    Object.keys(datos.hechas).forEach(id => { if (POR_ID[id]) set.add(POR_ID[id].p); });
+    return [...set];
+  }
+
+  function pantallaPasaporte() {
+    const sellados = paisesSellados();
+    const paises = Object.keys(BANDERAS);
+    const hechas = Object.keys(datos.hechas).filter(id => POR_ID[id]);
+    $app.innerHTML = `
+      <div class="tarjeta">
+        <h3>Tu pasaporte del té</h3>
+        <p class="suave pequeño" style="margin:4px 0 0">Cada receta que preparas sella su país. ¿Llegarás a dar la vuelta al mundo?</p>
+        <div class="barra-total"><i style="width:${(sellados.length / paises.length) * 100}%"></i></div>
+        <b>${sellados.length}</b> de ${paises.length} países · <b>${hechas.length}</b> de ${RECETAS.length} recetas
+      </div>
+      <div class="sellos">
+        ${paises.map(p => `
+          <button class="sello ${sellados.includes(p) ? "ok" : ""}" data-pais="${esc(p)}">
+            <span class="b">${BANDERAS[p]}</span>${esc(p)}
+          </button>`).join("")}
+      </div>
+      <p class="suave pequeño" style="margin-top:14px">Toca un país para ver sus recetas.</p>`;
+  }
+
+  // ---------- Vitalidad y peso ----------
+  function estadoReto() {
+    const r = datos.reto;
+    if (!r) return null;
+    const hoy = fechaISO();
+    const diaN = diasEntre(r.inicio, hoy) + 1; // 1 = primer día
+    const hechos = r.dias.filter(d => diasEntre(r.inicio, d) >= 0 && diasEntre(r.inicio, d) < 30).length;
+    return { inicio: r.inicio, diaN, hechos, terminado: diaN > 30, hoyHecho: r.dias.includes(hoy) };
+  }
+
+  function pantallaVitalidad() {
+    const momentos = ["mañana", "mediodía", "tarde", "noche"];
+    const vit = RECETAS.filter(r => r.t === "vitalidad");
+    $app.innerHTML = `
+      <div class="aviso honesto">
+        <b>Con sinceridad:</b> ningún té adelgaza por sí solo. Lo que sí funciona es
+        <b>cambiar bebidas azucaradas por tés sin azúcar</b>, beber más agua, dormir bien
+        y no picar entre horas. Esta sección te ayuda con eso.
+      </div>
+
+      <h3 class="seccion">🏆 Reto de 30 días</h3>
+      <div class="tarjeta">${htmlReto()}</div>
+
+      <h3 class="seccion">🗓️ Tu rutina de tés</h3>
+      <div class="tarjeta">
+        ${momentos.map(m => {
+          const opciones = vit.filter(r => r.mom === m);
+          return `<div class="momento"><div class="m">${MOMENTOS[m]}</div><div>
+            <b style="text-transform:capitalize">${m}</b><br>
+            ${opciones.map(r => `<a href="#/r/${r.id}">${esc(r.n)}</a>`).join("<br>")}
+          </div></div>`;
+        }).join("")}
+        <p class="suave pequeño" style="margin:10px 0 0">Consejo: evita la cafeína a partir de las 5 de la tarde para dormir mejor.</p>
+      </div>
+
+      <h3 class="seccion">⚖️ Registro de peso</h3>
+      <div class="tarjeta">${htmlPeso()}</div>
+
+      <p class="suave pequeño">Si tomas medicación, estás embarazada o tienes alguna enfermedad, consulta con tu médico antes de cambiar tus hábitos.</p>`;
+  }
+
+  function htmlReto() {
+    const e = estadoReto();
+    if (!e) {
+      return `<p style="margin-top:0"><b>Cambia un refresco o zumo azucarado por un té sin azúcar cada día, durante 30 días.</b></p>
+        <p class="suave pequeño">Cada lata de refresco que no tomas son unos 35 g de azúcar menos (unos 9 terrones). Tienes ideas en
+        <a href="#/r/v-sustituto-refresco">hibisco con gas</a> y en la sección de fríos.</p>
+        <button class="btn ancho" data-reto-empezar>Empezar el reto hoy</button>`;
     }
-  });
-  $app.addEventListener("change", ev => {
-    if (ev.target.id === "grupo" && rosario) {
-      rosario = { grupo: ev.target.value, pasos: pasosRosario(ev.target.value), i: 0 };
-      render();
+    const celdas = [];
+    for (let i = 0; i < 30; i++) {
+      const f = sumarDias(e.inicio, i);
+      const hecho = datos.reto.dias.includes(f);
+      const esHoy = i === e.diaN - 1;
+      celdas.push(`<div class="dia ${hecho ? "hecho" : ""} ${esHoy ? "hoy" : ""}">${hecho ? "✓" : i + 1}</div>`);
     }
-  });
-  $app.addEventListener("keydown", ev => {
-    if (ev.target.id === "apodo" && ev.key === "Enter") {
-      ev.preventDefault();
-      const b = $app.querySelector('[data-act="crear"]'); if (b) b.click();
+    const azucar = e.hechos * 35;
+    let pie;
+    if (e.terminado) {
+      pie = `<p><b>¡Reto terminado!</b> Lo cumpliste ${e.hechos} de 30 días y te ahorraste unos ${azucar} g de azúcar.</p>
+        <button class="btn ancho" data-reto-empezar>Empezar otro reto</button>`;
+    } else {
+      pie = `<button class="btn ancho ${e.hoyHecho ? "sec" : ""}" data-reto-hoy>${e.hoyHecho ? "✓ Hoy cumplido (toca para deshacer)" : "Hoy he cambiado un refresco por un té"}</button>
+        <p class="suave pequeño" style="margin:10px 0 0">Día ${e.diaN} de 30 · <button class="btn peligro" style="padding:4px 12px;font-size:13px" data-reto-borrar>Reiniciar</button></p>`;
+    }
+    return `<div><b>${e.hechos}</b> ${e.hechos === 1 ? "día cumplido" : "días cumplidos"} · unos <b>${azucar} g</b> de azúcar ahorrados</div>
+      <div class="calendario">${celdas.join("")}</div>${pie}`;
+  }
+
+  function htmlPeso() {
+    const lista = [...datos.peso].sort((a, b) => a.f.localeCompare(b.f));
+    let grafica = "";
+    if (lista.length >= 2) {
+      const ult = lista.slice(-20);
+      const kg = ult.map(p => p.kg);
+      const min = Math.min(...kg) - 0.5, max = Math.max(...kg) + 0.5;
+      const pts = ult.map((p, i) => {
+        const x = 10 + (i / (ult.length - 1)) * 280;
+        const y = 10 + (1 - (p.kg - min) / (max - min)) * 100;
+        return x.toFixed(1) + "," + y.toFixed(1);
+      }).join(" ");
+      grafica = `<svg class="grafica" viewBox="0 0 300 120" preserveAspectRatio="none" aria-label="Evolución del peso">
+        <polyline points="${pts}" fill="none" stroke="var(--verde)" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+      </svg>`;
+    }
+    let cambio = "";
+    if (lista.length >= 2) {
+      const d = lista[lista.length - 1].kg - lista[0].kg;
+      cambio = `<p style="margin:4px 0">Desde el ${fechaBonita(lista[0].f)}: <b>${d > 0 ? "+" : ""}${d.toFixed(1).replace(".", ",")} kg</b></p>`;
+    }
+    return `
+      <p class="suave pequeño" style="margin-top:0">Opcional. Se guarda solo en este móvil y nunca sale de él. Pésate siempre a la misma hora, mejor una vez por semana.</p>
+      <div class="peso-form">
+        <input id="pesoKg" type="text" inputmode="decimal" placeholder="Peso en kg (ej. 72,5)">
+        <input id="pesoFecha" type="date" value="${fechaISO()}" max="${fechaISO()}">
+        <button class="btn" data-peso-anadir>Añadir</button>
+      </div>
+      ${cambio}${grafica}
+      ${lista.length ? `<ul class="lista-peso">${[...lista].reverse().slice(0, 10).map(p =>
+        `<li><span>${fechaBonita(p.f)}</span><span><b>${p.kg.toFixed(1).replace(".", ",")} kg</b> <button data-peso-borrar="${p.f}" aria-label="Borrar">✕</button></span></li>`).join("")}</ul>` : ""}`;
+  }
+
+  // ---------- Ajustes ----------
+  function pantallaAjustes() {
+    $app.innerHTML = `
+      <div class="tarjeta">
+        <h3>🔒 Tus datos</h3>
+        <p>Amazing Tea no tiene cuentas, no usa internet y no envía nada a ningún sitio.
+        Tus favoritos, sellos, el reto y el registro de peso se guardan <b>solo en este móvil</b>.</p>
+        <p class="suave pequeño">Si desinstalas la app o borras sus datos desde Ajustes de Android, se perderán.</p>
+        <button class="btn peligro ancho" data-borrar-todo>Borrar todos mis datos</button>
+      </div>
+      <div class="tarjeta">
+        <h3>⚕️ Aviso de salud</h3>
+        <p style="margin-bottom:0">Los usos de cada té e infusión son los tradicionales o populares, no consejos médicos.
+        Si tomas medicación, estás embarazada, das el pecho o tienes una enfermedad, consulta antes con tu médico o farmacéutico.</p>
+      </div>
+      <div class="tarjeta">
+        <h3>🍵 Amazing Tea</h3>
+        <p style="margin:0" class="suave">Versión 0.1 · ${RECETAS.length} recetas de ${Object.keys(BANDERAS).length} países y regiones.</p>
+      </div>`;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 5. NAVEGACIÓN                                                       *
+   *    Cada pantalla tiene su dirección (#/recetas, #/r/chai-masala…). *
+   *    Así el botón "atrás" de Android funciona como se espera.        *
+   * ------------------------------------------------------------------ */
+  const TITULOS = { inicio: "Amazing Tea", recetas: "Recetas", pasaporte: "Pasaporte", vitalidad: "Vitalidad y peso", ajustes: "Ajustes" };
+
+  function ir(hash) { location.hash = hash; }
+
+  function router() {
+    const partes = (location.hash || "#/").slice(2).split("/");
+    const ruta = partes[0] || "inicio";
+    const id = partes[1];
+    if (ruta !== "t") pararTemporizador();
+
+    const pestaña = { r: "recetas", t: "recetas", ajustes: "" }[ruta] ?? ruta;
+    document.querySelectorAll(".barra a").forEach(a => a.classList.toggle("activa", a.dataset.tab === pestaña));
+    $atras.hidden = !["r", "t", "ajustes"].includes(ruta);
+    $titulo.textContent = TITULOS[ruta] || "Amazing Tea";
+
+    if (ruta === "inicio") pantallaInicio();
+    else if (ruta === "recetas") pantallaRecetas();
+    else if (ruta === "r") pantallaFicha(id);
+    else if (ruta === "t") pantallaTemporizador(id);
+    else if (ruta === "pasaporte") pantallaPasaporte();
+    else if (ruta === "vitalidad") pantallaVitalidad();
+    else if (ruta === "ajustes") pantallaAjustes();
+    else return ir("#/");
+    if (ruta !== "recetas") window.scrollTo(0, 0);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 6. BOTONES (un único "escuchador" para toda la app)                 *
+   * ------------------------------------------------------------------ */
+  document.addEventListener("click", e => {
+    const b = e.target.closest("[data-ir],[data-filtro],[data-tipo],[data-toggle],[data-ef],[data-limpiar],[data-quitar-pais],[data-fav],[data-hecha],[data-pausa],[data-pais],[data-reto-empezar],[data-reto-hoy],[data-reto-borrar],[data-peso-anadir],[data-peso-borrar],[data-borrar-todo]");
+    if (!b) return;
+    const d = b.dataset;
+
+    if (d.ir) return ir(d.ir);
+
+    // Filtros
+    if (d.filtro) {
+      filtro = Object.assign({ q: "", tipo: "", ef: "", sinCaf: false, fav: false, pais: "" }, JSON.parse(d.filtro));
+      return ir("#/recetas");
+    }
+    if (d.tipo !== undefined) { filtro.tipo = d.tipo; return pantallaRecetas(); }
+    if (d.toggle) { filtro[d.toggle] = !filtro[d.toggle]; return pantallaRecetas(); }
+    if (d.ef) { filtro.ef = filtro.ef === d.ef ? "" : d.ef; return pantallaRecetas(); }
+    if (d.limpiar !== undefined) { filtro = { q: "", tipo: "", ef: "", sinCaf: false, fav: false, pais: "" }; return pantallaRecetas(); }
+    if (d.quitarPais !== undefined) { filtro.pais = ""; return pantallaRecetas(); }
+    if (d.pais) {
+      filtro = { q: "", tipo: "", ef: "", sinCaf: false, fav: false, pais: d.pais };
+      return ir("#/recetas");
+    }
+
+    // Favoritos y recetas hechas
+    if (d.fav) {
+      datos.fav = esFav(d.fav) ? datos.fav.filter(x => x !== d.fav) : datos.fav.concat(d.fav);
+      guardar();
+      aviso(esFav(d.fav) ? "Añadida a favoritos" : "Quitada de favoritos");
+      return pantallaFicha(d.fav);
+    }
+    if (d.hecha) {
+      const r = POR_ID[d.hecha];
+      const nuevoPais = !paisesSellados().includes(r.p);
+      datos.hechas[d.hecha] = (datos.hechas[d.hecha] || 0) + 1;
+      guardar();
+      aviso(nuevoPais ? `¡Nuevo sello! ${bandera(r.p)} ${r.p}` : "¡Sellado en tu pasaporte!");
+      return d.volver ? ir("#/r/" + d.hecha) : pantallaFicha(d.hecha);
+    }
+
+    // Temporizador
+    if (d.pausa !== undefined && temp) {
+      if (temp.pausado) {
+        temp.fin = Date.now() + temp.resto; temp.pausado = false;
+        b.textContent = "⏸ Pausa"; document.getElementById("respira").classList.remove("parado");
+      } else {
+        temp.resto = Math.max(0, temp.fin - Date.now()); temp.pausado = true;
+        b.textContent = "▶ Seguir"; document.getElementById("respira").classList.add("parado");
+      }
+      return;
+    }
+
+    // Reto
+    if (d.retoEmpezar !== undefined) {
+      datos.reto = { inicio: fechaISO(), dias: [] }; guardar();
+      aviso("¡Reto empezado! Mucho ánimo");
+      return pantallaVitalidad();
+    }
+    if (d.retoHoy !== undefined) {
+      const hoy = fechaISO();
+      datos.reto.dias = datos.reto.dias.includes(hoy) ? datos.reto.dias.filter(x => x !== hoy) : datos.reto.dias.concat(hoy);
+      guardar();
+      return pantallaVitalidad();
+    }
+    if (d.retoBorrar !== undefined) {
+      if (confirm("¿Reiniciar el reto? Se borrará el progreso.")) { datos.reto = null; guardar(); pantallaVitalidad(); }
+      return;
+    }
+
+    // Peso
+    if (d.pesoAnadir !== undefined) {
+      const kg = parseFloat(String(document.getElementById("pesoKg").value).replace(",", "."));
+      const f = document.getElementById("pesoFecha").value || fechaISO();
+      if (!(kg >= 20 && kg <= 300)) return aviso("Escribe un peso entre 20 y 300 kg");
+      datos.peso = datos.peso.filter(p => p.f !== f).concat({ f, kg: Math.round(kg * 10) / 10 });
+      guardar();
+      aviso("Peso guardado");
+      return pantallaVitalidad();
+    }
+    if (d.pesoBorrar) {
+      datos.peso = datos.peso.filter(p => p.f !== d.pesoBorrar); guardar();
+      return pantallaVitalidad();
+    }
+
+    // Borrar todo
+    if (d.borrarTodo !== undefined) {
+      if (confirm("¿Borrar favoritos, sellos, reto y registro de peso? No se puede deshacer.")) {
+        datos = VACIO(); guardar(); aviso("Datos borrados"); ir("#/");
+      }
     }
   });
 
-  /* ------------------------------------------------------------------ *
-   * 10. ARRANQUE                                                         *
-   * ------------------------------------------------------------------ */
-  vista = perfilActual() ? "mapa" : "inicio";
-  render();
+  $atras.addEventListener("click", () => { if (history.length > 1) history.back(); else ir("#/"); });
+  document.getElementById("btnAjustes").addEventListener("click", () => ir("#/ajustes"));
+  window.addEventListener("hashchange", router);
+  router();
 })();

@@ -1,11 +1,11 @@
 {
-  "name": "amazing-jesus-apk",
+  "name": "amazing-tea-apk",
   "version": "0.1.0",
   "private": true,
-  "description": "App Android de prueba de Amazing Jesús (catequesis de Primera Comunión), empaquetada con Capacitor",
+  "description": "App Android de Amazing Tea (recetas de tés e infusiones del mundo), empaquetada con Capacitor",
   "scripts": {
     "preparar": "cap add android || true; cap sync android",
-    "iconos": "capacitor-assets generate --android --iconBackgroundColor '#2B4C9B' --splashBackgroundColor '#EEF2FA' --splashBackgroundColorDark '#14244F'"
+    "iconos": "capacitor-assets generate --android --iconBackgroundColor '#2F5D50' --splashBackgroundColor '#F7F3EA' --splashBackgroundColorDark '#161513'"
   },
   "dependencies": {
     "@capacitor/android": "6.1.2",
